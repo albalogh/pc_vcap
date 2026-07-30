@@ -1,0 +1,50 @@
+Reverse-engineered structure of pc002_002.inp
+
+FILE SIZE
+---------
+245859 bytes
+
+HEADER
+------
+Offset 0,  4 bytes, little-endian float32: sample_rate_hz = 256.0
+Offset 4,  2 bytes, little-endian uint16: sample_count = 15360
+Offset 6,  2 bytes, little-endian uint16: stored_channel_count = 8
+Offset 8,  4 bytes, little-endian float32: duration_s = 60.0
+Offset 12, 24 bytes: reserved, all zero in this file
+Offset 36, 4 bytes, little-endian int32: marker = -1
+Offset 40, 2 bytes, little-endian uint16: flags = 0
+Offset 42: length-prefixed metadata strings:
+  recorded_at = '2024/09/30   11:33:25'
+  subject_id = 'pc002'
+  unknown_u16 = 0
+  signal_configuration_path = 'C:\\winlung\\sgn\\psrn.sgn'
+
+DATA
+----
+Data offset: 99 bytes
+Encoding: little-endian signed 16-bit integers
+Layout: sample-major interleaving
+Shape: 15360 samples x 8 stored fields
+Payload size: 245760 bytes
+
+CHANNEL OBSERVATIONS
+--------------------
+Raw channel 1: respiratory waveform candidate.
+Raw channel 4: time capnogram; morphology is characteristic.
+Raw channels 2 and 3: constant at 2179 in this recording.
+Raw channels 5-8: nearly constant; likely inactive, auxiliary, or status inputs.
+
+Exact engineering-unit conversion cannot be recovered from this .inp file alone.
+The header points to 'C:\\winlung\\sgn\\psrn.sgn'; that .sgn file probably contains channel
+names, gains, offsets, and units.
+
+STATISTICS
+----------
+ch1: min=24, max=83, mean=53.523, SD=16.679, unique_values=60
+ch2: min=2179, max=2179, mean=2179.000, SD=0.000, unique_values=1
+ch3: min=2179, max=2179, mean=2179.000, SD=0.000, unique_values=1
+ch4: min=22, max=178, mean=86.624, SD=68.606, unique_values=157
+ch5: min=16, max=20, mean=17.846, SD=0.423, unique_values=5
+ch6: min=-28, max=-13, mean=-19.992, SD=0.468, unique_values=16
+ch7: min=-17, max=-14, mean=-14.983, SD=0.146, unique_values=4
+ch8: min=-22, max=-19, mean=-20.212, SD=0.414, unique_values=4

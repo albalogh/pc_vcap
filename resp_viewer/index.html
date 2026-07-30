@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CapnoView</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+  <div class="app-container">
+    
+    <!-- Top Header Bar -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="logo">
+          <span class="logo-icon">🫁</span>
+          <div class="logo-text">
+            <h1>Capno<span>View</span></h1>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <div class="file-meta-badge" id="file-meta-badge">
+          <span class="badge" id="file-type-badge">NINCS FÁJL</span>
+          <span class="meta-item" id="meta-subject">-</span>
+          <span class="meta-item" id="meta-date">-</span>
+          <span class="meta-item" id="meta-duration">-</span>
+          <span class="meta-item" id="meta-fs">-</span>
+          <span class="meta-item" id="meta-channels">-</span>
+          <span class="meta-item highlight" id="meta-breaths-count">0 ciklus</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Top Workflow Dashboard (Steps 1, 2, 3 in 2 Compact Rows) -->
+    <section class="workflow-dashboard">
+      
+      <!-- Row 1: Step 1 (File) & Step 2 (Calibration) -->
+      <div class="dashboard-row">
+        <!-- Card 1: Adatforrás betöltése -->
+        <div class="step-card step-file">
+          <div class="step-card-header">
+            <span class="step-badge">1. LÉPÉS</span>
+            <h2>Adatforrás betöltése</h2>
+          </div>
+          <div class="step-card-body file-controls">
+            <div class="file-loader-group">
+              <label for="workspace-files-select">Mappa .inp / .csv fájljai:</label>
+              <select id="workspace-files-select">
+                <option value="">-- Fájlok betöltése... --</option>
+              </select>
+              <button id="refresh-files-btn" class="btn icon-btn" title="Mappa frissítése">🔄</button>
+            </div>
+            <div class="local-file-upload">
+              <label for="local-file-input" class="btn secondary btn-sm">📂 Helyi fájl</label>
+              <input type="file" id="local-file-input" accept=".inp,.csv" hidden>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2: Utólagos kalibráció -->
+        <div class="step-card step-cal">
+          <div class="step-card-header">
+            <span class="step-badge">2. LÉPÉS</span>
+            <h2>Utólagos kalibráció (CO2 és áramlás)</h2>
+          </div>
+          <div class="step-card-body cal-controls">
+            <div class="cal-group">
+              <label for="cal-co2-gain" title="CO2 kapnográf kalibrációs szorzó">CO2 gain:</label>
+              <input type="number" id="cal-co2-gain" value="0.231" step="0.001" min="0.001" max="10.0">
+            </div>
+            <div class="cal-group">
+              <label for="cal-co2-zero" title="CO2 száraz levegő 0 Hgmm alapvonal">CO2 zero:</label>
+              <input type="number" id="cal-co2-zero" value="22.0" step="0.5">
+            </div>
+            <div class="cal-group">
+              <label for="cal-flow-gain" title="Áramlás kalibrációs szorzó">Flow gain:</label>
+              <input type="number" id="cal-flow-gain" value="19.56" step="0.05" min="0.1" max="500.0">
+            </div>
+            <div class="cal-group">
+              <label for="cal-flow-zero" title="Áramlás nyugalmi alapvonal">Flow zero:</label>
+              <input type="number" id="cal-flow-zero" value="0.0" step="0.5">
+            </div>
+            <button id="cal-reset-btn" class="btn secondary btn-sm" title="Alapértelmezett beállítások (36 Hgmm / 500 ml VT)">
+              🔄 Alapértelmezett
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 2: Step 3 (Processing & Cycle Detection) -->
+      <div class="dashboard-row">
+        <div class="step-card step-process full-row-card">
+          <div class="step-card-header">
+            <span class="step-badge">3. LÉPÉS</span>
+            <h2>Jelfeldolgozás és ciklusérzékelés</h2>
+          </div>
+          <div class="step-card-body process-controls">
+            <div class="control-group">
+              <label for="vol-method-select">Volumenjel korrekció:</label>
+              <select id="vol-method-select" class="select-sm">
+                <option value="linear_detrend" selected>Ciklusok szerinti lineáris trendlevonás (javasolt)</option>
+                <option value="envelope">Burkológörbe-alapú trendlevonás</option>
+                <option value="highpass">Felüláteresztő szűrő</option>
+                <option value="raw">Nyers integrál</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <label for="detect-method-select">Ciklusérzékelés módja:</label>
+              <select id="detect-method-select" class="select-sm">
+                <option value="capnogram" selected>4. csatorna (kapnogram lefutó él)</option>
+                <option value="flow">1. csatorna (áramlás nullátmenet)</option>
+                <option value="hybrid">Hibrid (kapnogram és áramlás)</option>
+              </select>
+            </div>
+
+            <div class="control-group toggle-group">
+              <label class="switch">
+                <input type="checkbox" id="polarity-toggle">
+                <span class="slider"></span>
+              </label>
+              <span class="toggle-label">1. csatorna invertálása</span>
+            </div>
+
+            <div class="control-group slider-group">
+              <label for="baseline-slider">Áramlás alapvonal: <span id="baseline-val-label">0.0</span></label>
+              <input type="range" id="baseline-slider" min="-50" max="50" step="0.5" value="0">
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Main Content Area: 50% Left Viewer (Step 4) | 50% Right Cycle Table (Step 5) -->
+    <main class="app-main split-layout" id="drop-zone">
+      
+      <!-- LEFT 50%: Step 4 — Megjelenítés és vizualizáció (Viewer) -->
+      <section class="viewport-left step-card step-view-card">
+        <div class="step-card-header view-card-header">
+          <div class="header-title-group">
+            <span class="step-badge">4. LÉPÉS</span>
+            <h2>Megjelenítés és vizualizáció</h2>
+          </div>
+          <div class="view-modes">
+            <button class="mode-tab active" data-mode="stacked">Egyszerre 3 sávos</button>
+            <button class="mode-tab" data-mode="overlay">Kombinált (overlay)</button>
+            <button class="mode-tab" data-mode="loop">Légzési hurok</button>
+            <button class="mode-tab volcap-tab" data-mode="volcap">📈 Volumetrikus kapnogram (CO2 vs. volumen)</button>
+            <button id="reset-zoom-btn" class="btn secondary btn-sm" title="Teljes nézet visszaállítása">🔍 Teljes nézet</button>
+          </div>
+        </div>
+        
+        <div class="charts-container" id="chart-viewport">
+          <div class="chart-tooltip-bar" id="hover-tooltip-bar">
+            Mozgass egeret a grafikonok felett a pontos idő-, áramlás (ml/s)-, CO2 (Hgmm)- és volumenértékek (ml) kiolvasásához...
+          </div>
+          <div class="chart-visible-range">
+            Megjelenített tartomány: <span id="visible-range-label">0.0s — 0.0s</span>
+          </div>
+          <div class="volcap-legend hidden" id="volcap-legend">
+            <span class="legend-item"><i style="background: #00f0ff"></i> 1. Fowler anatómiai holttér — 2. fázis inflexió</span>
+            <span class="legend-item"><i style="background: #ff9f1c"></i> 2. PECO2 és PACO2 (alveoláris CO2)</span>
+            <span class="legend-item"><i style="background: #10b981"></i> 3. Bohr élettani holttér és 4. VCO2-térfogat</span>
+          </div>
+          <canvas id="stacked-canvas" class="chart-canvas"></canvas>
+          <canvas id="overlay-canvas" class="chart-canvas hidden"></canvas>
+          <canvas id="loop-canvas" class="chart-canvas hidden"></canvas>
+          <canvas id="volcap-canvas" class="chart-canvas hidden"></canvas>
+        </div>
+      </section>
+
+      <!-- RIGHT 50%: Step 5 — Ciklusok részletes elemzése (Breaths Table) -->
+      <section class="viewport-right step-card step-table-card">
+        <div class="step-card-header table-header">
+          <div class="header-title-group">
+            <span class="step-badge">5. LÉPÉS</span>
+            <h2>Ciklusok részletes elemzése (kattints a sorra a grafikon kiemeléséhez)</h2>
+          </div>
+          <input type="text" id="breath-search-input" placeholder="🔍 Ciklus keresése (#)...">
+        </div>
+        
+        <div class="table-scroll">
+          <table class="breaths-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>VT (ml)</th>
+                <th>EtCO2 (Hgmm)</th>
+                <th>1. VD Fowler (ml)</th>
+                <th>2. PECO2 (Hgmm)</th>
+                <th>2. PACO2 (Hgmm)</th>
+                <th>3. V_DB Bohr (%)</th>
+                <th>3. V_DB Bohr (ml)</th>
+                <th>4. VCO2 (ml)</th>
+                <th>Kezdet (s)</th>
+                <th>Vége (s)</th>
+                <th>Ti (s)</th>
+                <th>Te (s)</th>
+                <th>RR (bpm)</th>
+              </tr>
+            </thead>
+            <tbody id="breaths-table-body">
+              <tr class="empty-row">
+                <td colspan="14">Válassz egy .inp vagy .csv fájlt az adatok megjelenítéséhez.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Strip: Step 6 — Összesített eredmények és adatexport (Summary Stats & Export) -->
+    <section class="analysis-footer">
+      <div class="step-card step-summary-card">
+        <div class="step-card-header">
+          <span class="step-badge">6. LÉPÉS</span>
+          <h2>Összesített eredmények és adatexport</h2>
+        </div>
+        
+        <div class="step-card-body summary-body">
+          <!-- 6 Horizontal Stat Cards -->
+          <div class="stats-strip">
+            <div class="stat-card">
+              <span class="stat-label">Átlagos légvételi volumen (VT)</span>
+              <span class="stat-value vol-highlight" id="stat-vt">0.0 <small>ml</small></span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">1. Fowler anatómiai holttér</span>
+              <span class="stat-value" id="stat-fowler" style="color:#00f0ff">0.0 <small>ml</small></span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">2. PECO2 / PACO2 (alveoláris CO2)</span>
+              <span class="stat-value co2-highlight" id="stat-peco-paco">0.0 / 0.0 <small>Hgmm</small></span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">3. Bohr-féle élettani holttér (V_DB)</span>
+              <span class="stat-value" id="stat-bohr" style="color:#f43f5e">0.0 <small>%</small></span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">4. Kilégzett CO2-térfogat (VCO2)</span>
+              <span class="stat-value" id="stat-vco2" style="color:#10b981">0.0 <small>ml</small></span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Légzésszám és I:E arány</span>
+              <span class="stat-value" id="stat-rr">0.0 <small>bpm</small></span>
+            </div>
+          </div>
+
+          <!-- Export Actions Column -->
+          <div class="export-strip">
+            <button id="export-signals-btn" class="btn primary btn-sm" disabled>⬇ Kalibrált jelek exportálása (.CSV)</button>
+            <button id="export-breaths-btn" class="btn secondary btn-sm" disabled>⬇ Volumetrikus kapnográfia exportálása (.CSV)</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <footer class="app-footer">
+      <p>CapnoView</p>
+    </footer>
+
+    <!-- Loading overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+      <div class="spinner"></div>
+      <p id="loading-text">Adatok betöltése és integrálása...</p>
+    </div>
+
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
