@@ -176,12 +176,16 @@ def compute_volume_and_breaths(time_s, ch1, ch4=None, mode="linear_detrend", pol
     in_exp = False
     for i in range(1, n):
         if not in_exp and ch4_arr[i] > thresh_high:
-            if not coarse_starts or (time_arr[i] - time_arr[coarse_starts[-1]]) > 0.8:
+            if not coarse_ends or (time_arr[i] - time_arr[coarse_ends[-1]]) > 0.4:
                 coarse_starts.append(i)
                 in_exp = True
         elif in_exp and ch4_arr[i] < thresh_low:
-            coarse_ends.append(i)
-            in_exp = False
+            if (time_arr[i] - time_arr[coarse_starts[-1]]) > 0.3:
+                coarse_ends.append(i)
+                in_exp = False
+            else:
+                coarse_starts.pop()
+                in_exp = False
 
     n_coarse = min(len(coarse_starts), len(coarse_ends))
     if n_coarse == 0:
@@ -191,13 +195,17 @@ def compute_volume_and_breaths(time_s, ch1, ch4=None, mode="linear_detrend", pol
     win_samples = int(0.5 / dt)
     fine_starts = []
     fine_ends = []
+    last_end = 0
 
     for k in range(n_coarse):
         cs = coarse_starts[k]
         ce = coarse_ends[k]
 
+        if cs <= last_end:
+            continue
+
         # Search for flow zero-crossing near cs (Flow <= 0 to > 0)
-        w0 = max(1, cs - win_samples)
+        w0 = max(last_end + 1, cs - win_samples)
         w1 = min(n - 1, cs + win_samples)
         fs = cs
         for i in range(w0, w1):
@@ -206,7 +214,7 @@ def compute_volume_and_breaths(time_s, ch1, ch4=None, mode="linear_detrend", pol
                 break
 
         # Search for flow zero-crossing near ce (Flow >= 0 to < 0)
-        w2 = max(1, ce - win_samples)
+        w2 = max(fs + 5, ce - win_samples)
         w3 = min(n - 1, ce + win_samples)
         fe = ce
         for i in range(w2, w3):
@@ -217,6 +225,7 @@ def compute_volume_and_breaths(time_s, ch1, ch4=None, mode="linear_detrend", pol
         if fe > fs + 10:
             fine_starts.append(fs)
             fine_ends.append(fe)
+            last_end = fe
 
     if not fine_starts:
         return {}

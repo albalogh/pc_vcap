@@ -513,7 +513,7 @@ class RespViewerApp {
     const co2Range = maxCo2 - minCo2;
     if (co2Range < 5.0) return [0, n - 1];
 
-    // Step 1: Coarse CO2 expiration boundaries
+    // Step 1: Coarse CO2 expiration boundaries with 0.4s refractory period
     const threshHigh = minCo2 + co2Range * 0.25;
     const threshLow = minCo2 + co2Range * 0.15;
     const coarseStarts = [];
@@ -522,13 +522,18 @@ class RespViewerApp {
 
     for (let i = 1; i < n; i++) {
       if (!inExp && ch4[i] > threshHigh) {
-        if (coarseStarts.length === 0 || (time_s[i] - time_s[coarseStarts[coarseStarts.length - 1]]) > 0.8) {
+        if (coarseEnds.length === 0 || (time_s[i] - time_s[coarseEnds[coarseEnds.length - 1]]) > 0.4) {
           coarseStarts.push(i);
           inExp = true;
         }
       } else if (inExp && ch4[i] < threshLow) {
-        coarseEnds.push(i);
-        inExp = false;
+        if ((time_s[i] - time_s[coarseStarts[coarseStarts.length - 1]]) > 0.3) {
+          coarseEnds.push(i);
+          inExp = false;
+        } else {
+          coarseStarts.pop();
+          inExp = false;
+        }
       }
     }
 
@@ -538,12 +543,15 @@ class RespViewerApp {
     // Step 2: Fine-tuning via calibrated flow zero-crossings (+/- 0.5s window)
     const winSamples = Math.floor(0.5 / dt);
     const starts = [];
+    let lastEnd = 0;
 
     for (let k = 0; k < nCoarse; k++) {
       const cs = coarseStarts[k];
       const ce = coarseEnds[k];
 
-      const w0 = Math.max(1, cs - winSamples);
+      if (cs <= lastEnd) continue;
+
+      const w0 = Math.max(lastEnd + 1, cs - winSamples);
       const w1 = Math.min(n - 1, cs + winSamples);
       let fs = cs;
       for (let i = w0; i < w1; i++) {
@@ -553,7 +561,7 @@ class RespViewerApp {
         }
       }
 
-      const w2 = Math.max(1, ce - winSamples);
+      const w2 = Math.max(fs + 5, ce - winSamples);
       const w3 = Math.min(n - 1, ce + winSamples);
       let fe = ce;
       for (let i = w2; i < w3; i++) {
@@ -565,6 +573,7 @@ class RespViewerApp {
 
       if (fe > fs + 10) {
         starts.push(fs);
+        lastEnd = fe;
       }
     }
 
