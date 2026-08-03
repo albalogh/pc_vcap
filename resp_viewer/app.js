@@ -373,13 +373,11 @@ class RespViewerApp {
 
     // Automatic polarity inversion for pc1 directory files
     const selVal = (this.fileSelect && this.fileSelect.value) ? this.fileSelect.value : '';
-    const fn = (data.filename || selVal).toLowerCase();
-    const isPc1 = fn.includes('pc1/') || fn.startsWith('pc1') || fn.includes('pc1');
+    const fn = (data.rel_path || data.filename || selVal || '').toLowerCase();
+    const isPc1 = fn.includes('pc1') || fn.startsWith('pc1');
 
-    if (isPc1) {
+    if (isPc1 || data.default_polarity === -1.0) {
       this.polarity = -1.0;
-    } else if (data.default_polarity !== undefined) {
-      this.polarity = data.default_polarity;
     } else {
       this.polarity = 1.0;
     }
@@ -407,6 +405,11 @@ class RespViewerApp {
 
   reprocessSignals() {
     if (!this.rawFile || !this.time_s.length) return;
+
+    // Respect user toggle state or pc1 auto-polarity
+    if (this.polarityToggle) {
+      this.polarity = this.polarityToggle.checked ? -1.0 : 1.0;
+    }
 
     const n = this.time_s.length;
     const dt = this.time_s[1] - this.time_s[0];
