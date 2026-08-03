@@ -143,7 +143,9 @@ def compute_volume_and_breaths(time_s, ch1, ch4=None, mode="linear_detrend", pol
     dt = time_arr[1] - time_arr[0] if n > 1 else 1.0 / 256.0
 
     # 1. Flow baseline & calibration (ml/s)
-    base = flow_offset if flow_offset is not None else np.median(ch1_arr)
+    # Mean baseline mathematically equalizes total inspiratory and expiratory volumes (zero net volume drift)
+    auto_base = float(np.mean(ch1_arr))
+    base = flow_offset if flow_offset is not None else auto_base
     flow_arr = -(ch1_arr - base) * polarity * flow_gain
     vol_raw = np.cumsum(flow_arr) * dt
 
@@ -383,10 +385,14 @@ class RespViewerHandler(SimpleHTTPRequestHandler):
         else:
             raise ValueError("Unsupported file extension.")
 
+        # Automatically invert polarity (-1.0) for pc1 directory files
+        default_polarity = -1.0 if ("pc1/" in filename or filename.startswith("pc1")) else 1.0
+
         ch1 = data["channels"].get("raw_ch1", [])
         ch4 = data["channels"].get("raw_ch4", None)
-        proc = compute_volume_and_breaths(data["time_s"], ch1, ch4=ch4)
+        proc = compute_volume_and_breaths(data["time_s"], ch1, ch4=ch4, polarity=default_polarity)
         data["computed"] = proc
+        data["default_polarity"] = default_polarity
         return data
 
     def send_json_response(self, obj):

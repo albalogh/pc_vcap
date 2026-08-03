@@ -371,6 +371,19 @@ class RespViewerApp {
     this.viewMinS = this.time_s[0] || 0.0;
     this.viewMaxS = this.time_s[this.time_s.length - 1] || 60.0;
 
+    // Automatic polarity inversion for pc1 directory files
+    const filename = data.filename || '';
+    if (data.default_polarity !== undefined) {
+      this.polarity = data.default_polarity;
+    } else if (filename.includes('pc1/') || filename.startsWith('pc1')) {
+      this.polarity = -1.0;
+    } else {
+      this.polarity = 1.0;
+    }
+    if (this.polarityToggle) {
+      this.polarityToggle.checked = (this.polarity === -1.0);
+    }
+
     this.updateMetadataUI(data);
 
     this.exportSignalsBtn.disabled = false;
@@ -396,9 +409,11 @@ class RespViewerApp {
     const dt = this.time_s[1] - this.time_s[0];
 
     // 1. Kalibrált áramlásjel ml/s
-    const sortedCh1 = [...this.ch1Raw].sort((a, b) => a - b);
-    const medianCh1 = sortedCh1[Math.floor(n / 2)];
-    const baseline = medianCh1 + this.baselineOffset + this.flowZeroOffset;
+    // Auto-balanced mean baseline: mathematically forces Vinsp == Vexp (zero net volume drift)
+    let sumCh1 = 0;
+    for (let i = 0; i < n; i++) sumCh1 += this.ch1Raw[i];
+    const meanCh1 = sumCh1 / n;
+    const baseline = meanCh1 + this.baselineOffset + this.flowZeroOffset;
 
     this.flow = new Float32Array(n);
     for (let i = 0; i < n; i++) {
