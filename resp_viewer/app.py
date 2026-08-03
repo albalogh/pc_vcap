@@ -357,11 +357,15 @@ class RespViewerHandler(SimpleHTTPRequestHandler):
 
     def get_available_files(self):
         files = []
-        for p in sorted(WORKSPACE_DIR.iterdir()):
+        ignored_dirs = {".git", "__pycache__", ".venv", "venv", "node_modules", "resp_viewer"}
+        for p in sorted(WORKSPACE_DIR.rglob("*")):
+            if any(part in ignored_dirs for part in p.parts):
+                continue
             if p.is_file() and p.suffix.lower() in [".inp", ".csv"]:
+                rel_path = p.relative_to(WORKSPACE_DIR).as_posix()
                 size_kb = round(p.stat().st_size / 1024.0, 1)
                 files.append({
-                    "name": p.name,
+                    "name": rel_path,
                     "type": p.suffix.lower()[1:],
                     "size_kb": size_kb,
                     "path": str(p.resolve()),
@@ -369,8 +373,8 @@ class RespViewerHandler(SimpleHTTPRequestHandler):
         return {"files": files, "workspace": str(WORKSPACE_DIR)}
 
     def load_file_data(self, filename: str):
-        target = WORKSPACE_DIR / filename
-        if not target.exists():
+        target = (WORKSPACE_DIR / filename).resolve()
+        if not str(target).startswith(str(WORKSPACE_DIR)) or not target.exists():
             raise FileNotFoundError(f"File not found: {filename}")
         if target.suffix.lower() == ".inp":
             data = decode_inp_file(target)
