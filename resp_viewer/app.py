@@ -249,34 +249,39 @@ def compute_volume_and_breaths(time_s, ch1, ch4=None, mode="linear_detrend", pol
         })
 
     # Step 3: Adaptive Mean +/- 2.5 SD Breath Quality Filter
+    m_vt, sd_vt = 0.0, 0.0
+    m_te, sd_te = 0.0, 0.0
     if len(candidates) >= 3:
         vts = [c["vt"] for c in candidates]
         tes = [c["te"] for c in candidates]
         m_vt, sd_vt = np.mean(vts), np.std(vts, ddof=1) if len(vts) > 1 else 0.0
         m_te, sd_te = np.mean(tes), np.std(tes, ddof=1) if len(tes) > 1 else 0.0
 
-        filtered = []
-        for c in candidates:
-            pass_vt_range = (50 <= c["vt"] <= 2500)
-            pass_te_range = (0.3 <= c["te"] <= 7.0)
-            pass_co2_range = (10 <= c["et_co2"] <= 65)
+    for c in candidates:
+        reasons = []
+        if not (50 <= c["vt"] <= 2500):
+            reasons.append(f"VT ({c['vt']:.0f} ml) out of range 50-2500ml")
+        if not (0.3 <= c["te"] <= 7.0):
+            reasons.append(f"Te ({c['te']:.2f} s) out of range 0.3-7.0s")
+        if not (10 <= c["et_co2"] <= 65):
+            reasons.append(f"EtCO2 ({c['et_co2']:.1f} mmHg) out of range")
+        if sd_vt > 0 and abs(c["vt"] - m_vt) > 2.5 * sd_vt:
+            reasons.append(f"VT ({c['vt']:.0f} ml) > mean ± 2.5 SD ({m_vt:.0f} ± {2.5*sd_vt:.0f} ml)")
+        if sd_te > 0 and abs(c["te"] - m_te) > 2.5 * sd_te:
+            reasons.append(f"Te ({c['te']:.2f} s) > mean ± 2.5 SD ({m_te:.2f} ± {2.5*sd_te:.2f} s)")
 
-            pass_vt_sd = (sd_vt == 0 or abs(c["vt"] - m_vt) <= 2.5 * sd_vt)
-            pass_te_sd = (sd_te == 0 or abs(c["te"] - m_te) <= 2.5 * sd_te)
-
-            if pass_vt_range and pass_te_range and pass_co2_range and pass_vt_sd and pass_te_sd:
-                filtered.append(c)
-    else:
-        filtered = candidates
-
-    if not filtered:
-        filtered = candidates
+        if reasons:
+            c["status"] = "rejected"
+            c["rejection_reason"] = "; ".join(reasons)
+        else:
+            c["status"] = "valid"
+            c["rejection_reason"] = ""
 
     # 4. Detrended Volume & Volumetric Capnography calculation for valid breaths
     vol_detrended = np.zeros_like(vol_raw)
     breaths = []
 
-    for idx_b, c in enumerate(filtered):
+    for idx_b, c in enumerate(candidates):
         i0, i1 = c["i0"], c["i1"]
         vt, te, ti, rr, et_co2 = c["vt"], c["te"], c["ti"], c["rr"], c["et_co2"]
         cycle_co2, cycle_time, v_exh = c["cycle_co2"], c["cycle_time"], c["v_exh"]
@@ -331,6 +336,8 @@ def compute_volume_and_breaths(time_s, ch1, ch4=None, mode="linear_detrend", pol
 
         breaths.append({
             "index": idx_b + 1,
+            "status": c["status"],
+            "rejection_reason": c["rejection_reason"],
             "start_s": round(float(time_arr[i0]), 3),
             "peak_s": round(float(time_arr[i0 + int(len(cycle_co2) * 0.5)]), 3),
             "end_s": round(float(time_arr[i1]), 3),

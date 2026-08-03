@@ -26,7 +26,7 @@ class RespViewerApp {
 
     // Jelfeldolgozási beállítások
     this.volMode = 'linear_detrend';
-    this.detectMode = 'capnogram';
+    this.detectMode = 'twostep';
     this.polarity = 1.0;
     this.baselineOffset = 0.0;
     this.viewMode = 'stacked'; // 'stacked', 'overlay', 'loop', 'volcap'
@@ -372,11 +372,14 @@ class RespViewerApp {
     this.viewMaxS = this.time_s[this.time_s.length - 1] || 60.0;
 
     // Automatic polarity inversion for pc1 directory files
-    const filename = data.filename || '';
-    if (data.default_polarity !== undefined) {
-      this.polarity = data.default_polarity;
-    } else if (filename.includes('pc1/') || filename.startsWith('pc1')) {
+    const selVal = (this.fileSelect && this.fileSelect.value) ? this.fileSelect.value : '';
+    const fn = (data.filename || selVal).toLowerCase();
+    const isPc1 = fn.includes('pc1/') || fn.startsWith('pc1') || fn.includes('pc1');
+
+    if (isPc1) {
       this.polarity = -1.0;
+    } else if (data.default_polarity !== undefined) {
+      this.polarity = data.default_polarity;
     } else {
       this.polarity = 1.0;
     }
@@ -758,8 +761,18 @@ class RespViewerApp {
       if (b.index === this.activeBreathIndex) {
         tr.classList.add('active-row');
       }
+      if (b.status === 'rejected') {
+        tr.style.opacity = '0.65';
+        tr.style.backgroundColor = 'rgba(239, 68, 68, 0.08)';
+        tr.title = `KISZŰRVE: ${b.rejection_reason || 'Kiugró érték'}`;
+      }
+
+      const statusBadge = (b.status === 'rejected')
+        ? `<span class="badge" style="background:#ef4444; color:#fff; font-size:9px; padding:2px 5px; border-radius:4px; margin-left:4px;" title="${b.rejection_reason}">KISZŰRVE</span>`
+        : '';
+
       tr.innerHTML = `
-        <td><strong>#${b.index}</strong></td>
+        <td><strong>#${b.index}</strong>${statusBadge}</td>
         <td><strong style="color:var(--color-vol)">${b.vt.toFixed(1)}</strong></td>
         <td><span style="color:var(--color-co2)">${b.et_co2.toFixed(1)}</span></td>
         <td><strong style="color:#00f0ff">${b.fowler_vd.toFixed(1)}</strong></td>
@@ -1071,16 +1084,31 @@ class RespViewerApp {
       const xPeak = ((b.peak_s - this.viewMinS) / duration) * w;
       const xEnd = ((b.end_s - this.viewMinS) / duration) * w;
 
-      ctx.fillStyle = 'rgba(0, 240, 255, 0.04)';
-      ctx.fillRect(x0, 0, xPeak - x0, h);
+      if (b.status === 'rejected') {
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.12)';
+        ctx.fillRect(x0, 0, xEnd - x0, h);
 
-      ctx.fillStyle = 'rgba(255, 159, 28, 0.04)';
-      ctx.fillRect(xPeak, 0, xEnd - xPeak, h);
-
-      if (b.index === this.activeBreathIndex) {
-        ctx.strokeStyle = 'rgba(0, 240, 255, 0.5)';
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
         ctx.strokeRect(x0, 0, xEnd - x0, h);
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
+        ctx.font = 'bold 10px Inter, sans-serif';
+        ctx.fillText(`[KISZŰRVE #${b.index}]`, x0 + 4, 16);
+      } else {
+        ctx.fillStyle = 'rgba(0, 240, 255, 0.04)';
+        ctx.fillRect(x0, 0, xPeak - x0, h);
+
+        ctx.fillStyle = 'rgba(255, 159, 28, 0.04)';
+        ctx.fillRect(xPeak, 0, xEnd - xPeak, h);
+
+        if (b.index === this.activeBreathIndex) {
+          ctx.strokeStyle = 'rgba(0, 240, 255, 0.5)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x0, 0, xEnd - x0, h);
+        }
       }
     }
   }
