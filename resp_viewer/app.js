@@ -495,53 +495,76 @@ class RespViewerApp {
   }
 
   detectBreathBoundaries(ch4, flow, time_s, mode) {
-    const starts = [0];
     const n = time_s.length;
-    let useCo2 = false;
+    if (!n || !ch4 || ch4.length !== n) return [0, n - 1];
 
-    if ((mode === 'capnogram' || mode === 'hybrid') && ch4 && ch4.length === n) {
-      let minCo2 = Infinity, maxCo2 = -Infinity;
-      for (let i = 0; i < n; i++) {
-        if (ch4[i] < minCo2) minCo2 = ch4[i];
-        if (ch4[i] > maxCo2) maxCo2 = ch4[i];
+    const dt = time_s[1] - time_s[0];
+    let minCo2 = Infinity, maxCo2 = -Infinity;
+    for (let i = 0; i < n; i++) {
+      if (ch4[i] < minCo2) minCo2 = ch4[i];
+      if (ch4[i] > maxCo2) maxCo2 = ch4[i];
+    }
+    const co2Range = maxCo2 - minCo2;
+    if (co2Range < 5.0) return [0, n - 1];
+
+    // Step 1: Coarse CO2 expiration boundaries
+    const threshHigh = minCo2 + co2Range * 0.25;
+    const threshLow = minCo2 + co2Range * 0.15;
+    const coarseStarts = [];
+    const coarseEnds = [];
+    let inExp = false;
+
+    for (let i = 1; i < n; i++) {
+      if (!inExp && ch4[i] > threshHigh) {
+        if (coarseStarts.length === 0 || (time_s[i] - time_s[coarseStarts[coarseStarts.length - 1]]) > 0.8) {
+          coarseStarts.push(i);
+          inExp = true;
+        }
+      } else if (inExp && ch4[i] < threshLow) {
+        coarseEnds.push(i);
+        inExp = false;
       }
-      if ((maxCo2 - minCo2) > 5.0) {
-        useCo2 = true;
-        const threshHigh = minCo2 + (maxCo2 - minCo2) * 0.35;
-        const threshLow = minCo2 + (maxCo2 - minCo2) * 0.20;
-        let inExpiration = false;
-        for (let i = 1; i < n; i++) {
-          if (ch4[i] > threshHigh) {
-            inExpiration = true;
-          } else if (inExpiration && ch4[i] < threshLow) {
-            if ((time_s[i] - time_s[starts[starts.length - 1]]) > 0.8) {
-              starts.push(i);
-              inExpiration = false;
-            }
-          }
+    }
+
+    const nCoarse = Math.min(coarseStarts.length, coarseEnds.length);
+    if (nCoarse === 0) return [0, n - 1];
+
+    // Step 2: Fine-tuning via calibrated flow zero-crossings (+/- 0.5s window)
+    const winSamples = Math.floor(0.5 / dt);
+    const starts = [];
+
+    for (let k = 0; k < nCoarse; k++) {
+      const cs = coarseStarts[k];
+      const ce = coarseEnds[k];
+
+      const w0 = Math.max(1, cs - winSamples);
+      const w1 = Math.min(n - 1, cs + winSamples);
+      let fs = cs;
+      for (let i = w0; i < w1; i++) {
+        if (flow[i - 1] <= 0 && flow[i] > 0) {
+          fs = i;
+          break;
         }
       }
-    }
 
-    if (!useCo2 || starts.length < 3) {
-      starts.length = 0;
-      starts.push(0);
-      let inNeg = false;
-      for (let i = 1; i < n; i++) {
-        if (flow[i] < -20.0) {
-          inNeg = true;
-        } else if (inNeg && flow[i] > 20.0) {
-          if ((time_s[i] - time_s[starts[starts.length - 1]]) > 0.8) {
-            starts.push(i);
-            inNeg = false;
-          }
+      const w2 = Math.max(1, ce - winSamples);
+      const w3 = Math.min(n - 1, ce + winSamples);
+      let fe = ce;
+      for (let i = w2; i < w3; i++) {
+        if (flow[i - 1] >= 0 && flow[i] < 0) {
+          fe = i;
+          break;
         }
+      }
+
+      if (fe > fs + 10) {
+        starts.push(fs);
       }
     }
 
-    if (starts[starts.length - 1] !== n - 1) {
-      starts.push(n - 1);
-    }
+    if (starts.length === 0) return [0, n - 1];
+    if (starts[starts.length - 1] !== n - 1) starts.push(n - 1);
+
     return starts;
   }
 

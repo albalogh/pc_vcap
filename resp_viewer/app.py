@@ -19,6 +19,8 @@ from urllib.parse import urlparse, parse_qs
 
 import numpy as np
 
+trapezoid = getattr(np, "trapezoid", getattr(np, "trapz", None))
+
 WORKSPACE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -154,121 +156,186 @@ def compute_volume_and_breaths(time_s, ch1, ch4=None, mode="linear_detrend", pol
     if ch4 is not None and len(ch4) == n:
         ch4_arr = (np.array(ch4) - co2_zero) * co2_gain
 
-    # 3. Breath detection (end of expiration / start of inspiration)
-    breath_starts = [0]
-    use_co2 = False
-    if ch4_arr is not None:
-        min_co2 = float(np.min(ch4_arr))
-        max_co2 = float(np.max(ch4_arr))
-        if (max_co2 - min_co2) > 5.0:
-            use_co2 = True
-            thresh_high = min_co2 + (max_co2 - min_co2) * 0.35
-            thresh_low = min_co2 + (max_co2 - min_co2) * 0.20
-            in_expiration = False
-            for i in range(1, n):
-                if ch4_arr[i] > thresh_high:
-                    in_expiration = True
-                elif in_expiration and ch4_arr[i] < thresh_low:
-                    if (time_arr[i] - time_arr[breath_starts[-1]]) > 0.8:
-                        breath_starts.append(i)
-                        in_expiration = False
+    if ch4_arr is None:
+        return {}
 
-    if not use_co2 or len(breath_starts) < 3:
-        breath_starts = [0]
-        in_neg = False
-        for i in range(1, n):
-            if flow_arr[i] < -20.0:
-                in_neg = True
-            elif in_neg and flow_arr[i] > 20.0:
-                if (time_arr[i] - time_arr[breath_starts[-1]]) > 0.8:
-                    breath_starts.append(i)
-                    in_neg = False
+    min_co2 = float(np.min(ch4_arr))
+    max_co2 = float(np.max(ch4_arr))
+    co2_range = max_co2 - min_co2
 
-    if breath_starts[-1] != n - 1:
-        breath_starts.append(n - 1)
+    if co2_range < 5.0:
+        return {}
 
-    # 4. Detrended Volume & Volumetric Capnography calculation
+    # 3. Two-Step Expiration Detection (Mainstream Capnography Alignment)
+    # Step 1: Coarse detection via capnogram CO2 thresholds
+    thresh_high = min_co2 + co2_range * 0.25
+    thresh_low = min_co2 + co2_range * 0.15
+
+    coarse_starts = []
+    coarse_ends = []
+    in_exp = False
+    for i in range(1, n):
+        if not in_exp and ch4_arr[i] > thresh_high:
+            if not coarse_starts or (time_arr[i] - time_arr[coarse_starts[-1]]) > 0.8:
+                coarse_starts.append(i)
+                in_exp = True
+        elif in_exp and ch4_arr[i] < thresh_low:
+            coarse_ends.append(i)
+            in_exp = False
+
+    n_coarse = min(len(coarse_starts), len(coarse_ends))
+    if n_coarse == 0:
+        return {}
+
+    # Step 2: Fine-tuning via calibrated flow zero-crossings (+/- 0.5s window)
+    win_samples = int(0.5 / dt)
+    fine_starts = []
+    fine_ends = []
+
+    for k in range(n_coarse):
+        cs = coarse_starts[k]
+        ce = coarse_ends[k]
+
+        # Search for flow zero-crossing near cs (Flow <= 0 to > 0)
+        w0 = max(1, cs - win_samples)
+        w1 = min(n - 1, cs + win_samples)
+        fs = cs
+        for i in range(w0, w1):
+            if flow_arr[i - 1] <= 0 and flow_arr[i] > 0:
+                fs = i
+                break
+
+        # Search for flow zero-crossing near ce (Flow >= 0 to < 0)
+        w2 = max(1, ce - win_samples)
+        w3 = min(n - 1, ce + win_samples)
+        fe = ce
+        for i in range(w2, w3):
+            if flow_arr[i - 1] >= 0 and flow_arr[i] < 0:
+                fe = i
+                break
+
+        if fe > fs + 10:
+            fine_starts.append(fs)
+            fine_ends.append(fe)
+
+    if not fine_starts:
+        return {}
+
+    # Calculate candidate breaths
+    candidates = []
+    for k in range(len(fine_starts)):
+        i0 = fine_starts[k]
+        i1 = fine_ends[k]
+
+        cycle_flow = flow_arr[i0:i1 + 1]
+        cycle_co2 = ch4_arr[i0:i1 + 1]
+        cycle_time = time_arr[i0:i1 + 1]
+
+        v_exh = np.cumsum(np.maximum(0.0, cycle_flow)) * dt
+        vt = float(v_exh[-1])
+
+        if vt < 50:
+            vt = float(np.sum(np.abs(cycle_flow)) * dt * 0.5)
+
+        te = float(cycle_time[-1] - cycle_time[0])
+        tot_time = te / 0.6 if te > 0 else 3.0
+        ti = tot_time - te
+        rr = 60.0 / tot_time if tot_time > 0 else 0.0
+        et_co2 = float(np.max(cycle_co2))
+
+        candidates.append({
+            "k": k, "i0": i0, "i1": i1, "vt": vt, "te": te, "ti": ti, "rr": rr,
+            "et_co2": et_co2, "cycle_flow": cycle_flow, "cycle_co2": cycle_co2, "cycle_time": cycle_time, "v_exh": v_exh
+        })
+
+    # Step 3: Adaptive Mean +/- 2.5 SD Breath Quality Filter
+    if len(candidates) >= 3:
+        vts = [c["vt"] for c in candidates]
+        tes = [c["te"] for c in candidates]
+        m_vt, sd_vt = np.mean(vts), np.std(vts, ddof=1) if len(vts) > 1 else 0.0
+        m_te, sd_te = np.mean(tes), np.std(tes, ddof=1) if len(tes) > 1 else 0.0
+
+        filtered = []
+        for c in candidates:
+            pass_vt_range = (50 <= c["vt"] <= 2500)
+            pass_te_range = (0.3 <= c["te"] <= 7.0)
+            pass_co2_range = (10 <= c["et_co2"] <= 65)
+
+            pass_vt_sd = (sd_vt == 0 or abs(c["vt"] - m_vt) <= 2.5 * sd_vt)
+            pass_te_sd = (sd_te == 0 or abs(c["te"] - m_te) <= 2.5 * sd_te)
+
+            if pass_vt_range and pass_te_range and pass_co2_range and pass_vt_sd and pass_te_sd:
+                filtered.append(c)
+    else:
+        filtered = candidates
+
+    if not filtered:
+        filtered = candidates
+
+    # 4. Detrended Volume & Volumetric Capnography calculation for valid breaths
     vol_detrended = np.zeros_like(vol_raw)
     breaths = []
 
-    for k in range(len(breath_starts) - 1):
-        i0 = breath_starts[k]
-        i1 = breath_starts[k + 1]
-        cycle_flow = flow_arr[i0:i1 + 1]
-        cycle_vol_raw = np.cumsum(cycle_flow) * dt
-        drift = cycle_vol_raw[-1]
-        correction = np.linspace(0, drift, len(cycle_vol_raw))
-        cycle_vol_corr = cycle_vol_raw - correction
-        
-        if k == 0:
-            vol_detrended[i0:i1 + 1] = cycle_vol_corr
+    for idx_b, c in enumerate(filtered):
+        i0, i1 = c["i0"], c["i1"]
+        vt, te, ti, rr, et_co2 = c["vt"], c["te"], c["ti"], c["rr"], c["et_co2"]
+        cycle_co2, cycle_time, v_exh = c["cycle_co2"], c["cycle_time"], c["v_exh"]
+
+        sort_idx = np.argsort(v_exh)
+        v_sorted = v_exh[sort_idx]
+        co2_sorted = cycle_co2[sort_idx]
+        _, uniq_idx = np.unique(v_sorted, return_index=True)
+        v_uniq = v_sorted[uniq_idx]
+        co2_uniq = co2_sorted[uniq_idx]
+
+        n_grid = max(int(vt), 50)
+        v_grid = np.linspace(0, vt, n_grid)
+        co2_grid = np.interp(v_grid, v_uniq, co2_uniq)
+
+        step_ds = max(1, len(v_grid) // 80)
+        volcap_curve = [[round(float(v_grid[idx]), 1), round(float(co2_grid[idx]), 2)]
+                        for idx in range(0, len(v_grid), step_ds)]
+
+        peco2 = float(trapezoid(co2_grid, v_grid) / vt) if vt > 0 else 0.0
+
+        dco2_dv = np.gradient(co2_grid, v_grid)
+        kernel_size = max(5, n_grid // 30)
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        dco2_smooth = np.convolve(dco2_dv, np.ones(kernel_size) / kernel_size, mode='same')
+
+        i_search_min = max(1, int(0.10 * n_grid))
+        i_search_max = min(n_grid - 1, int(0.65 * n_grid))
+
+        if i_search_max > i_search_min + 5:
+            idx_inflect = i_search_min + int(np.argmax(dco2_smooth[i_search_min:i_search_max]))
+            fowler_vd = float(v_grid[idx_inflect])
         else:
-            vol_detrended[i0 + 1:i1 + 1] = cycle_vol_corr[1:]
+            idx_inflect = int(0.30 * n_grid)
+            fowler_vd = 0.3 * vt
 
-        peak_rel_idx = int(np.argmax(cycle_vol_corr))
-        peak_idx = i0 + peak_rel_idx
-        vt = float(cycle_vol_corr[peak_rel_idx])
-        ti = float(time_arr[peak_idx] - time_arr[i0])
-        te = float(time_arr[i1] - time_arr[peak_idx])
-        tot_time = ti + te
-        rr = float(60.0 / tot_time) if tot_time > 0 else 0.0
+        i_p3_start = min(idx_inflect + int(0.15 * n_grid), int(0.65 * n_grid))
+        i_p3_end = max(i_p3_start + 5, n_grid - int(0.05 * n_grid))
 
-        et_co2 = 0.0
-        fowler_vd = 0.0
-        peco2 = 0.0
-        paco2 = 0.0
-        bohr_ratio = 0.0
-        bohr_vd = 0.0
-        vco2_ml = 0.0
-        volcap_curve = []
+        if i_p3_end > i_p3_start + 3 and i_p3_start < n_grid:
+            paco2 = float(np.mean(co2_grid[i_p3_start:i_p3_end]))
+        else:
+            paco2 = float(np.max(co2_grid))
 
-        if ch4_arr is not None and vt > 50 and (i1 - peak_idx) > 5:
-            co2_exp = ch4_arr[peak_idx:i1 + 1]
-            v_exh = vt - cycle_vol_corr[peak_rel_idx:]
-            et_co2 = float(np.max(co2_exp))
-            
-            sort_idx = np.argsort(v_exh)
-            v_sorted = v_exh[sort_idx]
-            co2_sorted = co2_exp[sort_idx]
-            _, uniq_idx = np.unique(v_sorted, return_index=True)
-            v_uniq = v_sorted[uniq_idx]
-            co2_uniq = co2_sorted[uniq_idx]
+        if paco2 <= peco2:
+            paco2 = max(et_co2, peco2 * 1.05)
 
-            v_grid = np.linspace(0, vt, int(vt) + 1)
-            co2_grid = np.interp(v_grid, v_uniq, co2_uniq)
-
-            step_ds = max(1, len(v_grid) // 80)
-            volcap_curve = [[round(float(v_grid[idx]), 1), round(float(co2_grid[idx]), 2)] 
-                            for idx in range(0, len(v_grid), step_ds)]
-
-            peco2 = float(np.mean(co2_grid))
-
-            dco2_dv = np.gradient(co2_grid, v_grid)
-            kernel_size = 11
-            dco2_smooth = np.convolve(dco2_dv, np.ones(kernel_size) / kernel_size, mode='same')
-            i_min = int(0.15 * len(v_grid))
-            i_max = int(0.65 * len(v_grid))
-            if i_max > i_min + 5:
-                idx_inflect = i_min + int(np.argmax(dco2_smooth[i_min:i_max]))
-                fowler_vd = float(v_grid[idx_inflect])
-            else:
-                fowler_vd = float(0.3 * vt)
-
-            i_p3_start = min(int(fowler_vd + 0.15 * vt), int(0.65 * len(v_grid)))
-            paco2 = float(np.mean(co2_grid[i_p3_start:])) if i_p3_start < len(co2_grid) else float(np.max(co2_grid))
-
-            bohr_ratio = float((paco2 - peco2) / paco2) if paco2 > 0 else 0.0
-            bohr_vd = float(bohr_ratio * vt)
-
-            vco2_ml = float((peco2 / 760.0) * vt)
+        bohr_ratio = float((paco2 - peco2) / paco2) if paco2 > 0 else 0.0
+        bohr_vd = float(bohr_ratio * vt)
+        vco2_ml = float((peco2 / 760.0) * vt)
 
         breaths.append({
-            "index": k + 1,
+            "index": idx_b + 1,
             "start_s": round(float(time_arr[i0]), 3),
-            "peak_s": round(float(time_arr[peak_idx]), 3),
+            "peak_s": round(float(time_arr[i0 + int(len(cycle_co2) * 0.5)]), 3),
             "end_s": round(float(time_arr[i1]), 3),
             "start_idx": int(i0),
-            "peak_idx": int(peak_idx),
+            "peak_idx": int(i0 + int(len(cycle_co2) * 0.5)),
             "end_idx": int(i1),
             "vt": round(vt, 1),
             "ti": round(ti, 3),
