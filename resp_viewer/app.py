@@ -464,6 +464,7 @@ class RespViewerHandler(SimpleHTTPRequestHandler):
 
         ch1 = data["channels"].get("raw_ch1", [])
         ch4 = data["channels"].get("raw_ch4", None)
+        proc = compute_volume_and_breaths(data["time_s"], ch1, ch4=ch4, polarity=default_polarity)
         data["rel_path"] = filename
         data["filename"] = filename
         data["computed"] = proc
