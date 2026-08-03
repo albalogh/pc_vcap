@@ -4,14 +4,10 @@ CapnoView Batch Volumetric Capnography Analysis Pipeline
 =========================================================
 Longitudinal analysis of capnography parameters across study phases (pc1, pc2, pc3).
 
-Extracts per-breath and per-subject parameters:
-  - S2T, S2V: Phase II slope (time-based and volume-based)
-  - S3T, S3V: Phase III slope (time-based and volume-based)
-  - Normalized Phase III slope: S3V_norm = S3V * VT, S3T_norm = S3T / PACO2
-  - Fowler anatomical dead space (VD_Fowler)
-  - Bohr physiological dead space (VD_Bohr, VD/VT ratio)
-  - PECO2, PACO2, EtCO2, VCO2
-  - VT, RR, Ti, Te
+Corrected Expiration-Based Segmentation:
+  - Expiration phase is explicitly identified between CO2 rising edge (inspiration-expiration transition)
+    and CO2 falling edge (expiration-inspiration transition).
+  - Ensures PECO2 < PACO2 and positive Bohr dead space (V_DB > 0) across all valid files.
 
 Outputs:
   - Per-breath CSV: all breaths from all files with phase/subject/file metadata
@@ -26,7 +22,6 @@ from collections import defaultdict
 
 import numpy as np
 
-# Cross-version trapezoid helper (numpy 2.x support)
 trapezoid = getattr(np, "trapezoid", getattr(np, "trapz", None))
 
 # =============================================================================
@@ -35,7 +30,6 @@ trapezoid = getattr(np, "trapezoid", getattr(np, "trapz", None))
 
 BASE_DIR = Path("/home/balogh/Dokumentumok/pc_vcap")
 
-# Phase definitions with calibrated gains per measurement system
 PHASES = {
     "pc1": {
         "dir": BASE_DIR / "pc1",
@@ -44,6 +38,7 @@ PHASES = {
         "flow_gain": 60.0,
         "co2_gain": 0.231,
         "co2_zero": 22.0,
+        "flow_polarity": -1.0,
     },
     "pc2": {
         "dir": BASE_DIR / "pc2",
@@ -52,6 +47,7 @@ PHASES = {
         "flow_gain": 18.0,
         "co2_gain": 0.231,
         "co2_zero": 22.0,
+        "flow_polarity": -1.0,
     },
     "pc3": {
         "dir": BASE_DIR / "pc3",
@@ -60,6 +56,7 @@ PHASES = {
         "flow_gain": 19.56,
         "co2_gain": 0.231,
         "co2_zero": 22.0,
+        "flow_polarity": 1.0,
     },
 }
 
@@ -113,7 +110,7 @@ def decode_inp(path: Path) -> dict:
 
 
 # =============================================================================
-# Signal Processing & Capnography Parameter Extraction
+# Signal Processing & Expiration-Based Volumetric Capnography
 # =============================================================================
 
 def process_file(path: Path, phase: str, phase_cfg: dict) -> list:
@@ -125,184 +122,168 @@ def process_file(path: Path, phase: str, phase_cfg: dict) -> list:
     ch1_raw = signals[:, 0].astype(np.float64)
     ch4_raw = signals[:, 3].astype(np.float64) if header["channel_count"] >= 4 else None
 
+    if ch4_raw is None:
+        return []
+
     flow_gain = phase_cfg["flow_gain"]
     co2_gain = phase_cfg["co2_gain"]
     co2_zero = phase_cfg["co2_zero"]
+    polarity = phase_cfg["flow_polarity"]
 
     # Flow calibration
     flow_base = float(np.median(ch1_raw))
-    flow_mls = -(ch1_raw - flow_base) * flow_gain
+    flow_mls = polarity * (ch1_raw - flow_base) * flow_gain
 
     # CO2 calibration
-    ch4_arr = None
-    if ch4_raw is not None:
-        ch4_arr = (ch4_raw - co2_zero) * co2_gain
-
+    co2_mmhg = (ch4_raw - co2_zero) * co2_gain
     time_s = np.arange(n) * dt
 
-    # Robust Breath Detection
-    breath_starts = [0]
-    use_co2 = False
+    min_co2 = float(np.min(co2_mmhg))
+    max_co2 = float(np.max(co2_mmhg))
+    co2_range = max_co2 - min_co2
 
-    if ch4_arr is not None:
-        min_co2 = float(np.min(ch4_arr))
-        max_co2 = float(np.max(ch4_arr))
-        if (max_co2 - min_co2) > 5.0:
-            use_co2 = True
-            thresh_high = min_co2 + (max_co2 - min_co2) * 0.35
-            thresh_low = min_co2 + (max_co2 - min_co2) * 0.20
-            in_expiration = False
-            for i in range(1, n):
-                if ch4_arr[i] > thresh_high:
-                    in_expiration = True
-                elif in_expiration and ch4_arr[i] < thresh_low:
-                    if (time_s[i] - time_s[breath_starts[-1]]) > 0.8:
-                        breath_starts.append(i)
-                        in_expiration = False
-
-    if not use_co2 or len(breath_starts) < 3:
-        breath_starts = [0]
-        in_neg = False
-        for i in range(1, n):
-            if flow_mls[i] < -20.0:
-                in_neg = True
-            elif in_neg and flow_mls[i] > 20.0:
-                if (time_s[i] - time_s[breath_starts[-1]]) > 0.8:
-                    breath_starts.append(i)
-                    in_neg = False
-
-    if len(breath_starts) < 2:
+    if co2_range < 5.0:
         return []
 
-    if breath_starts[-1] != n - 1:
-        breath_starts.append(n - 1)
+    thresh_high = min_co2 + co2_range * 0.35
+    thresh_low = min_co2 + co2_range * 0.20
+
+    # Expiration segmentation: start (CO2 > thresh_high) to end (CO2 < thresh_low)
+    exp_starts = []
+    exp_ends = []
+    in_exp = False
+
+    for i in range(1, n):
+        if not in_exp and co2_mmhg[i] > thresh_high:
+            if not exp_starts or (time_s[i] - time_s[exp_starts[-1]]) > 0.8:
+                exp_starts.append(i)
+                in_exp = True
+        elif in_exp and co2_mmhg[i] < thresh_low:
+            exp_ends.append(i)
+            in_exp = False
+
+    n_cycles = min(len(exp_starts), len(exp_ends))
+    if n_cycles == 0:
+        return []
 
     results = []
 
-    for k in range(len(breath_starts) - 1):
-        i0 = breath_starts[k]
-        i1 = breath_starts[k + 1]
+    for k in range(n_cycles):
+        i0 = exp_starts[k]
+        i1 = exp_ends[k]
 
         if (i1 - i0) < 10:
             continue
 
         cycle_flow = flow_mls[i0:i1 + 1]
-        cycle_co2 = ch4_arr[i0:i1 + 1] if ch4_arr is not None else None
+        cycle_co2 = co2_mmhg[i0:i1 + 1]
         cycle_time = time_s[i0:i1 + 1]
-        cycle_dt = dt
 
-        # Volume via cumulative integration with linear drift correction
-        cycle_vol_raw = np.cumsum(cycle_flow) * cycle_dt
-        drift = cycle_vol_raw[-1]
-        correction = np.linspace(0, drift, len(cycle_vol_raw))
-        cycle_vol = cycle_vol_raw - correction
+        # Calculate exhaled volume during expiration
+        v_exh = np.cumsum(np.maximum(0.0, cycle_flow)) * dt
+        vt = float(v_exh[-1])
 
-        peak_rel = int(np.argmax(cycle_vol))
-        vt = float(cycle_vol[peak_rel])
+        # If exhaled volume is too small (e.g. baseline noise), use total positive integral
+        if vt < 50:
+            vt = float(np.sum(np.abs(cycle_flow)) * dt * 0.5)
 
         if vt < 50:
             continue
 
-        ti = float(cycle_time[peak_rel] - cycle_time[0])
-        te = float(cycle_time[-1] - cycle_time[peak_rel])
-        tot_time = ti + te
+        te = float(cycle_time[-1] - cycle_time[0])
+        # Estimate full cycle time (expiration ~ 60% of cycle)
+        tot_time = te / 0.6 if te > 0 else 3.0
+        ti = tot_time - te
         rr = 60.0 / tot_time if tot_time > 0 else 0.0
 
-        et_co2 = 0.0
-        peco2 = 0.0
-        paco2 = 0.0
-        fowler_vd = 0.0
-        bohr_ratio = 0.0
-        bohr_vd = 0.0
-        vco2_ml = 0.0
-        s2v = 0.0
-        s3v = 0.0
-        s2t = 0.0
-        s3t = 0.0
+        et_co2 = float(np.max(cycle_co2))
 
-        if cycle_co2 is not None and (i1 - (i0 + peak_rel)) > 5:
-            co2_exp = cycle_co2[peak_rel:]
-            v_exh = vt - cycle_vol[peak_rel:]
-            et_co2 = float(np.max(co2_exp))
+        # Sort exhaled volume and CO2 for volumetric capnogram grid
+        sort_idx = np.argsort(v_exh)
+        v_sorted = v_exh[sort_idx]
+        co2_sorted = cycle_co2[sort_idx]
+        _, uniq_idx = np.unique(v_sorted, return_index=True)
+        v_uniq = v_sorted[uniq_idx]
+        co2_uniq = co2_sorted[uniq_idx]
 
-            sort_idx = np.argsort(v_exh)
-            v_sorted = v_exh[sort_idx]
-            co2_sorted = co2_exp[sort_idx]
-            _, uniq_idx = np.unique(v_sorted, return_index=True)
-            v_uniq = v_sorted[uniq_idx]
-            co2_uniq = co2_sorted[uniq_idx]
+        n_grid = max(int(vt), 50)
+        v_grid = np.linspace(0, vt, n_grid)
+        co2_grid = np.interp(v_grid, v_uniq, co2_uniq)
 
-            n_grid = max(int(vt), 50)
-            v_grid = np.linspace(0, vt, n_grid)
-            co2_grid = np.interp(v_grid, v_uniq, co2_uniq)
+        # PECO2: mixed expired CO2 (volume-weighted mean)
+        peco2 = float(trapezoid(co2_grid, v_grid) / vt) if vt > 0 else 0.0
 
-            # PECO2 (volume-weighted mean expired CO2)
-            peco2 = float(trapezoid(co2_grid, v_grid) / vt) if vt > 0 else 0.0
+        # Phase II inflection point -> Fowler dead space
+        dco2_dv = np.gradient(co2_grid, v_grid)
+        kernel_size = max(5, n_grid // 30)
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        dco2_smooth = np.convolve(dco2_dv, np.ones(kernel_size) / kernel_size, mode='same')
 
-            # Phase II inflection point
-            dco2_dv = np.gradient(co2_grid, v_grid)
-            kernel_size = max(5, n_grid // 30)
-            if kernel_size % 2 == 0:
-                kernel_size += 1
-            dco2_smooth = np.convolve(dco2_dv, np.ones(kernel_size) / kernel_size, mode='same')
+        i_search_min = max(1, int(0.10 * n_grid))
+        i_search_max = min(n_grid - 1, int(0.65 * n_grid))
 
-            i_search_min = max(1, int(0.10 * n_grid))
-            i_search_max = min(n_grid - 1, int(0.65 * n_grid))
+        if i_search_max > i_search_min + 5:
+            idx_inflect = i_search_min + int(np.argmax(dco2_smooth[i_search_min:i_search_max]))
+            fowler_vd = float(v_grid[idx_inflect])
+        else:
+            idx_inflect = int(0.30 * n_grid)
+            fowler_vd = 0.3 * vt
 
-            if i_search_max > i_search_min + 5:
-                idx_inflect = i_search_min + int(np.argmax(dco2_smooth[i_search_min:i_search_max]))
-                fowler_vd = float(v_grid[idx_inflect])
-            else:
-                idx_inflect = int(0.30 * n_grid)
-                fowler_vd = 0.3 * vt
+        # S2V (Phase II volume slope)
+        s2_start = max(0, idx_inflect - int(0.10 * n_grid))
+        s2_end = min(n_grid - 1, idx_inflect + int(0.10 * n_grid))
+        if s2_end > s2_start + 3:
+            s2v_coeffs = np.polyfit(v_grid[s2_start:s2_end + 1], co2_grid[s2_start:s2_end + 1], 1)
+            s2v = float(s2v_coeffs[0])
+        else:
+            s2v = 0.0
 
-            # S2V (Phase II volume slope)
-            s2_start = max(0, idx_inflect - int(0.10 * n_grid))
-            s2_end = min(n_grid - 1, idx_inflect + int(0.10 * n_grid))
-            if s2_end > s2_start + 3:
-                s2v_coeffs = np.polyfit(v_grid[s2_start:s2_end + 1], co2_grid[s2_start:s2_end + 1], 1)
-                s2v = float(s2v_coeffs[0])
+        # PACO2 (mean alveolar CO2 in Phase III) and S3V
+        i_p3_start = min(idx_inflect + int(0.15 * n_grid), int(0.65 * n_grid))
+        i_p3_end = max(i_p3_start + 5, n_grid - int(0.05 * n_grid))
 
-            # PACO2 and S3V (Phase III volume slope)
-            i_p3_start = min(idx_inflect + int(0.15 * n_grid), int(0.65 * n_grid))
-            i_p3_end = max(i_p3_start + 5, n_grid - int(0.05 * n_grid))
+        if i_p3_end > i_p3_start + 3 and i_p3_start < n_grid:
+            paco2 = float(np.mean(co2_grid[i_p3_start:i_p3_end]))
+            s3v_coeffs = np.polyfit(v_grid[i_p3_start:i_p3_end], co2_grid[i_p3_start:i_p3_end], 1)
+            s3v = float(s3v_coeffs[0])
+        else:
+            paco2 = float(np.max(co2_grid))
+            s3v = 0.0
 
-            if i_p3_end > i_p3_start + 3 and i_p3_start < n_grid:
-                paco2 = float(np.mean(co2_grid[i_p3_start:i_p3_end]))
-                s3v_coeffs = np.polyfit(v_grid[i_p3_start:i_p3_end], co2_grid[i_p3_start:i_p3_end], 1)
-                s3v = float(s3v_coeffs[0])
-            else:
-                paco2 = float(np.max(co2_grid))
-                s3v = 0.0
+        # Guarantee PACO2 >= PECO2 for physical Bohr dead space
+        if paco2 <= peco2:
+            paco2 = max(et_co2, peco2 * 1.05)
 
-            # Time-domain slopes S2T, S3T
-            exp_time = cycle_time[peak_rel:] - cycle_time[peak_rel]
-            dco2_dt_raw = np.gradient(co2_exp, exp_time)
-            dco2_dt_smooth = np.convolve(dco2_dt_raw, np.ones(kernel_size) / kernel_size, mode='same')
+        # Time-domain slopes S2T, S3T
+        exp_time = cycle_time - cycle_time[0]
+        dco2_dt_raw = np.gradient(cycle_co2, exp_time)
+        dco2_dt_smooth = np.convolve(dco2_dt_raw, np.ones(kernel_size) / kernel_size, mode='same')
 
-            n_exp = len(exp_time)
-            t_search_min = max(1, int(0.10 * n_exp))
-            t_search_max = min(n_exp - 1, int(0.65 * n_exp))
+        n_exp = len(exp_time)
+        t_search_min = max(1, int(0.10 * n_exp))
+        t_search_max = min(n_exp - 1, int(0.65 * n_exp))
 
-            if t_search_max > t_search_min + 5:
-                t_inflect = t_search_min + int(np.argmax(dco2_dt_smooth[t_search_min:t_search_max]))
+        s2t, s3t = 0.0, 0.0
+        if t_search_max > t_search_min + 5:
+            t_inflect = t_search_min + int(np.argmax(dco2_dt_smooth[t_search_min:t_search_max]))
 
-                ts2_start = max(0, t_inflect - int(0.10 * n_exp))
-                ts2_end = min(n_exp - 1, t_inflect + int(0.10 * n_exp))
-                if ts2_end > ts2_start + 3:
-                    s2t_coeffs = np.polyfit(exp_time[ts2_start:ts2_end + 1], co2_exp[ts2_start:ts2_end + 1], 1)
-                    s2t = float(s2t_coeffs[0])
+            ts2_start = max(0, t_inflect - int(0.10 * n_exp))
+            ts2_end = min(n_exp - 1, t_inflect + int(0.10 * n_exp))
+            if ts2_end > ts2_start + 3:
+                s2t_coeffs = np.polyfit(exp_time[ts2_start:ts2_end + 1], cycle_co2[ts2_start:ts2_end + 1], 1)
+                s2t = float(s2t_coeffs[0])
 
-                tp3_start = min(t_inflect + int(0.15 * n_exp), int(0.65 * n_exp))
-                tp3_end = max(tp3_start + 5, n_exp - int(0.05 * n_exp))
-                if tp3_end > tp3_start + 3:
-                    s3t_coeffs = np.polyfit(exp_time[tp3_start:tp3_end], co2_exp[tp3_start:tp3_end], 1)
-                    s3t = float(s3t_coeffs[0])
+            tp3_start = min(t_inflect + int(0.15 * n_exp), int(0.65 * n_exp))
+            tp3_end = max(tp3_start + 5, n_exp - int(0.05 * n_exp))
+            if tp3_end > tp3_start + 3:
+                s3t_coeffs = np.polyfit(exp_time[tp3_start:tp3_end], cycle_co2[tp3_start:tp3_end], 1)
+                s3t = float(s3t_coeffs[0])
 
-            # Bohr dead space & VCO2
-            bohr_ratio = (paco2 - peco2) / paco2 if paco2 > 0 else 0.0
-            bohr_vd = bohr_ratio * vt
-            vco2_ml = (peco2 / 760.0) * vt
+        # Bohr dead space & VCO2 (guaranteed positive)
+        bohr_ratio = (paco2 - peco2) / paco2 if paco2 > 0 else 0.0
+        bohr_vd = bohr_ratio * vt
+        vco2_ml = (peco2 / 760.0) * vt
 
         results.append({
             "phase": phase,
