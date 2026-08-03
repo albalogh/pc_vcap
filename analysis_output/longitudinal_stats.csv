@@ -1,0 +1,13 @@
+variable,short_name,label,type,pc1_mean,pc1_sd,pc2_mean,pc2_sd,pc3_mean,pc3_sd,test_type,stat_value,p_overall,p_pc1_vs_pc2,p_pc2_vs_pc3,p_pc1_vs_pc3
+s3v_norm_mmhg_mean,S3V_norm (mmHg),III. fázis normalizált meredekség (S3V * VT),norm,-32.949,14.328,-25.413,16.369,14.246,6.674,ANOVA F,26.072,0.0,0.3647,0.0011,2e-05
+s3t_mmhg_per_s_mean,S3T (mmHg/s),III. fázis időalapú meredekség (S3T),norm,-40.766,16.702,-18.603,18.774,5.088,2.772,ANOVA F,17.278,6e-05,0.01055,0.01151,0.00044
+s2t_mmhg_per_s_mean,S2T (mmHg/s),II. fázis időalapú meredekség (S2T),norm,0.977,4.305,3.075,7.118,60.896,18.914,ANOVA F,56.877,0.0,0.4511,0.00084,0.00028
+bohr_fraction_mean,Bohr VD/VT (%),Élettani holttér arány (Bohr VD/VT %),norm,-41.086,44.234,-38.614,44.988,32.914,10.752,ANOVA F,9.056,0.0019,0.92566,0.00962,0.00933
+fowler_fraction_mean,Fowler VD/VT (%),Anatómiai holttér arány (Fowler VD/VT %),norm,35.152,9.183,31.91,12.768,31.394,12.245,ANOVA F,0.219,0.80516,0.44475,0.92205,0.41196
+et_co2_mmhg_mean,EtCO2 (mmHg),End-tidal CO2 (EtCO2 mmHg),norm,32.083,4.127,25.102,11.996,29.905,5.543,ANOVA F,1.398,0.27271,0.16898,0.36479,0.24824
+peco2_mmhg_mean,PECO2 (mmHg),Átlagos kilégzett CO2 (PECO2 mmHg),norm,22.739,5.137,15.016,8.814,17.301,2.213,ANOVA F,3.033,0.07324,0.02215,0.49548,0.02716
+paco2_mmhg_mean,PACO2 (mmHg),Átlagos alveoláris CO2 (PACO2 mmHg),norm,20.343,6.145,13.197,8.538,26.432,5.582,ANOVA F,6.499,0.00751,0.0429,0.01196,0.13138
+s3v_mmhg_per_ml_mean,S3V (mmHg/ml),III. fázis térfogatalapú meredekség (S3V - nem norm.),raw,-0.317,0.157,-0.373,0.262,0.034,0.033,ANOVA F,10.85,0.00081,0.65589,0.00705,0.00077
+s2v_mmhg_per_ml_mean,S2V (mmHg/ml),II. fázis térfogatalapú meredekség (S2V - nem norm.),raw,-0.048,0.092,0.056,0.088,0.181,0.09,ANOVA F,11.407,0.00063,0.13033,0.00868,0.00729
+fowler_vd_ml_mean,Fowler VD (ml),Fowler anatómiai holttér térfogat (ml - nem norm.),raw,47.93,14.754,29.788,13.696,178.213,22.408,ANOVA F,151.715,0.0,0.02072,1e-05,8e-05
+vt_ml_mean,VT (ml),Légvételi térfogat (VT - nem norm.),raw,138.058,28.3,92.914,20.988,682.558,360.145,ANOVA F,17.272,6e-05,0.04094,0.00493,0.00757
