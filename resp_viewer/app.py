@@ -471,6 +471,12 @@ class RespViewerHandler(SimpleHTTPRequestHandler):
         data["default_polarity"] = default_polarity
         return data
 
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
     def send_json_response(self, obj):
         payload = json.dumps(obj).encode("utf-8")
         self.send_response(200)
